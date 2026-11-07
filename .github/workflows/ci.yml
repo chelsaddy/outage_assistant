@@ -1,0 +1,35 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: outage
+          POSTGRES_PASSWORD: outage
+          POSTGRES_DB: outage
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U outage -d outage"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://outage:outage@localhost:5432/outage
+      PGPASSWORD: outage
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Load schema and seed data
+        run: |
+          psql -h localhost -U outage -d outage -v ON_ERROR_STOP=1 -f db/01_schema.sql
+          psql -h localhost -U outage -d outage -v ON_ERROR_STOP=1 -f db/02_seed.sql
+      - name: Install dependencies
+        run: pip install -r api/requirements.txt
+      - name: Run tests
+        working-directory: api
+        run: pytest -q
