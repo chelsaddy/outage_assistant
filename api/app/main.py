@@ -2,14 +2,14 @@
 
 The agent calls these endpoints as tools:
   GET  /customers/lookup   -> get_customer
-  GET  /outages?area_id=   -> check_outages   (next)
+  GET  /outages?area_id=   -> check_outages
   POST /tickets            -> create_ticket   (next)
   POST /sms                -> send_sms        (next)
 """
 from fastapi import FastAPI, HTTPException, Query
 
 from app.helpers import db, normalize_phone
-from app.models import Customer
+from app.models import Customer, OutageCheck, ServiceType
 
 app = FastAPI(title="Telecom Outage Assistant: Tools API")
 
@@ -50,3 +50,37 @@ def get_customer(
     if row is None:
         raise HTTPException(404, "No customer found with those details.")
     return row
+
+
+@app.get("/outages", response_model=OutageCheck)
+def check_outages(
+    area_id: int = Query(..., description="Service area id, from get_customer"),
+    service_type: ServiceType | None = Query(None, description="Only outages affecting this service"),
+):
+    """List active outages in an area, optionally for one service type."""
+    with db() as conn:
+        area = conn.execute("SELECT id, name FROM service_areas WHERE id = %s", (area_id,)).fetchone()
+        if area is None:
+            raise HTTPException(404, f"No service area with id {area_id}.")
+
+        outages = conn.execute(
+            """
+            SELECT id, service_type, cause, started_at, eta,
+                   floor(extract(epoch FROM eta - now()) / 60)::int AS minutes_until_eta,
+                   coalesce(eta < now(), false) AS eta_overdue
+            FROM outages
+            WHERE area_id = %(area_id)s
+              AND status = 'active'
+              AND (%(service_type)s::text IS NULL OR service_type = %(service_type)s)
+            ORDER BY started_at
+            """,
+            {"area_id": area_id, "service_type": service_type},
+        ).fetchall()
+
+    return {
+        "area_id": area["id"],
+        "area_name": area["name"],
+        "service_type": service_type,
+        "has_active_outage": bool(outages),
+        "outages": outages,
+    }
