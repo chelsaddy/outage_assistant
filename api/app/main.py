@@ -3,13 +3,13 @@
 The agent calls these endpoints as tools:
   GET  /customers/lookup   -> get_customer
   GET  /outages?area_id=   -> check_outages
-  POST /tickets            -> create_ticket   (next)
+  POST /tickets            -> create_ticket
   POST /sms                -> send_sms        (next)
 """
 from fastapi import FastAPI, HTTPException, Query
 
 from app.helpers import db, normalize_phone
-from app.models import Customer, OutageCheck, ServiceType
+from app.models import Customer, OutageCheck, ServiceType, Ticket, TicketCreate
 
 app = FastAPI(title="Telecom Outage Assistant: Tools API")
 
@@ -84,3 +84,24 @@ def check_outages(
         "has_active_outage": bool(outages),
         "outages": outages,
     }
+
+
+@app.post("/tickets", response_model=Ticket, status_code=201)
+def create_ticket(ticket: TicketCreate):
+    """Open a fault ticket for a customer (used when no known outage explains the problem)."""
+    with db() as conn:
+        if conn.execute("SELECT 1 FROM customers WHERE id = %s", (ticket.customer_id,)).fetchone() is None:
+            raise HTTPException(404, f"No customer with id {ticket.customer_id}.")
+        if ticket.conversation_id is not None and conn.execute(
+            "SELECT 1 FROM conversations WHERE id = %s", (ticket.conversation_id,)
+        ).fetchone() is None:
+            raise HTTPException(404, f"No conversation with id {ticket.conversation_id}.")
+
+        return conn.execute(
+            """
+            INSERT INTO tickets (customer_id, conversation_id, category, priority, summary)
+            VALUES (%(customer_id)s, %(conversation_id)s, %(category)s, %(priority)s, %(summary)s)
+            RETURNING id, customer_id, conversation_id, category, priority, summary, status, created_at
+            """,
+            {**ticket.model_dump(), "summary": ticket.summary.strip()},
+        ).fetchone()
