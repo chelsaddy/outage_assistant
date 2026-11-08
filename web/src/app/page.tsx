@@ -29,7 +29,9 @@ function ConversationsView() {
   // Keep the newest message in view.
   const bottom = useRef<HTMLDivElement>(null);
   const stepCount = detail.data?.steps.length ?? 0;
-  useEffect(() => bottom.current?.scrollIntoView({ block: "end" }), [stepCount, pending]);
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ block: "end" });
+  }, [stepCount, pending]);
 
   const send = async (text: string) => {
     setPending(text);
