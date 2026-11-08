@@ -71,7 +71,7 @@ scripts/        seed generator
 ## Roadmap
 
 - [x] Repo, Docker Compose, schema, seed data, CI
-- [ ] Four tool endpoints: `get_customer`, `check_outages`, `create_ticket`, `send_sms`
+- [x] Four tool endpoints: `get_customer`, `check_outages`, `create_ticket`, `send_sms`
 - [ ] Agent loop with tool calling and human-escalation rule
 - [ ] Log every agent step to `agent_steps`
 - [ ] Next.js dashboard (conversation, tool trace, ticket queue)

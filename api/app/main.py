@@ -4,12 +4,12 @@ The agent calls these endpoints as tools:
   GET  /customers/lookup   -> get_customer
   GET  /outages?area_id=   -> check_outages
   POST /tickets            -> create_ticket
-  POST /sms                -> send_sms        (next)
+  POST /sms                -> send_sms
 """
 from fastapi import FastAPI, HTTPException, Query
 
-from app.helpers import db, normalize_phone
-from app.models import Customer, OutageCheck, ServiceType, Ticket, TicketCreate
+from app.helpers import db, normalize_phone, send_sms_message
+from app.models import Customer, OutageCheck, ServiceType, SmsCreate, SmsMessage, Ticket, TicketCreate
 
 app = FastAPI(title="Telecom Outage Assistant: Tools API")
 
@@ -105,3 +105,26 @@ def create_ticket(ticket: TicketCreate):
             """,
             {**ticket.model_dump(), "summary": ticket.summary.strip()},
         ).fetchone()
+
+
+@app.post("/sms", response_model=SmsMessage, status_code=201)
+def send_sms(sms: SmsCreate):
+    """Text a customer an update. Every attempt is recorded, including failures."""
+    body = sms.body.strip()
+    with db() as conn:
+        customer = conn.execute("SELECT phone FROM customers WHERE id = %s", (sms.customer_id,)).fetchone()
+        if customer is None:
+            raise HTTPException(404, f"No customer with id {sms.customer_id}.")
+
+    result = send_sms_message(customer["phone"], body)
+
+    with db() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO sms_messages (customer_id, to_phone, body, status, provider_sid)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, customer_id, to_phone, body, status, provider_sid, created_at
+            """,
+            (sms.customer_id, result.sent_to, body, result.status, result.provider_sid),
+        ).fetchone()
+    return {**row, "error": result.error}
