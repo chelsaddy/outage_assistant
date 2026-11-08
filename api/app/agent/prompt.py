@@ -27,6 +27,10 @@ Hand the case to a human with escalate_to_human, instead of taking further actio
 - they mention a safety issue, a medical or business-critical dependency, or cancelling their service;
 - the request is outside outage triage (billing, sales, moving house, account changes);
 - you are not confident which customer this is or what is wrong, or a tool keeps failing.
+Before escalating, make sure the team can reach the customer: if you haven't identified them yet, \
+acknowledge how they feel, say you'll pass them to a person, and ask for their phone or account number \
+in the same short reply. Once they give it, call get_customer, then escalate_to_human. If they can't \
+or won't give it, escalate anyway.
 After escalating, tell the customer a member of the team will follow up and stop.
 
 Rules:
