@@ -53,6 +53,8 @@ Some rules are enforced in code ([`tools.py`](api/app/agent/tools.py)), not just
 - If a later `get_customer` finds a different customer, the agent doesn't switch accounts and doesn't see the second customer's details. The conversation escalates to a human instead.
 - Once a conversation is escalated, no more tools run.
 
+**Known gap: identity verification.** The agent takes the customer's word for who they are. Anyone who knows a customer's phone or account number can see that customer's name and outage status. A planned fix is for `get_customer` to ask the customer's account authorization question (the security question set on their account) and only unlock the account after a correct answer. This isn't built yet; see the roadmap.
+
 **Logging.** Every user message, model response, tool call, tool result and escalation is a row in `agent_steps`. The same log is replayed as the model's history on the next message, so the trace a care agent sees is exactly what the model saw.
 
 ## Run it
@@ -180,6 +182,7 @@ scripts/          seed generator
 - [x] Log every agent step to `agent_steps`
 - [x] SMS delivery: simulated by default (Twilio sign-up rejects Trinidad and Tobago numbers); real Twilio sending works once keys are set
 - [x] Next.js dashboard (conversation, tool trace, ticket queue, SMS outbox)
+- [ ] Verify the customer with their account authorization question before revealing account details or acting on the account
 - [ ] Test set of ~15 scripted customer messages, scored on tool choice
 - [ ] Deploy and record a 2-minute demo
 - [ ] Stretch: expose the tools as an MCP server
