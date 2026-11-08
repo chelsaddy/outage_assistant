@@ -15,26 +15,44 @@ Every step the agent takes is logged, so a care agent can see exactly why it did
 ```mermaid
 flowchart LR
     C[Customer message] --> D[Next.js dashboard<br/>chat · tool trace · ticket queue]
-    D --> A[Agent loop<br/>LLM tool calling]
+    D -->|POST /chat| A[Agent loop<br/>Claude tool calling]
     A -->|get_customer| T[FastAPI tools API]
     A -->|check_outages| T
     A -->|create_ticket| T
     A -->|send_sms| T
-    A -. low confidence / upset customer .-> H[Human escalation]
-    T --> P[(PostgreSQL<br/>customers · outages · tickets<br/>agent_steps)]
+    A -->|escalate_to_human| H[Human escalation<br/>high-priority ticket]
+    T --> P[(PostgreSQL<br/>customers · outages · tickets<br/>conversations · agent_steps)]
     T -->|send_sms| S[Twilio SMS]
 ```
 
+The model decides which tool to call and when; the tools API does the work. The agent never touches the database or Twilio directly, so every action is validated, logged and testable in one place.
+
 | Part | Tech |
 |---|---|
-| Agent | Python, Anthropic SDK tool calling (no framework) |
-| Tools API | FastAPI |
+| Agent | Python, Anthropic SDK, native tool calling (no framework), Claude Opus 5.5 |
+| Tools API | FastAPI, Pydantic |
 | Data | PostgreSQL 16 |
-| SMS | Twilio (falls back to logged "simulated" messages with no keys) |
-| Dashboard | Next.js on Vercel |
+| SMS | Twilio REST API (simulated when no keys are set) |
+| Dashboard | Next.js on Vercel *(in progress)* |
 | Ops | Docker Compose, GitHub Actions CI |
 
+## How the agent works
+
+`POST /chat` takes one customer message and runs the loop in [`api/app/agent/loop.py`](api/app/agent/loop.py):
+
+1. Log the message, then send the conversation history and five tools to Claude.
+2. When Claude calls a tool, run it through the tools API and send the result back. Errors go back too, so the model can correct its input or ask the customer.
+3. Repeat until Claude replies to the customer.
+
+**Escalation.** The system prompt ([`prompt.py`](api/app/agent/prompt.py)) tells the agent to hand off instead of acting when the customer is upset or asks for a person, mentions safety or cancelling, asks about something outside outage triage, or when the agent isn't confident. It first asks for a phone or account number so the team can follow up, then calls `escalate_to_human`, which opens a high-priority `escalation` ticket and marks the conversation `escalated`. After that, new messages are recorded but the agent no longer acts on them.
+
+**Guardrails.** Tool inputs use strict JSON schemas. The loop stops after 10 model calls, and a refusal, a cut-off response or a runaway loop all escalate to a human rather than fail. Server-side model fallback is on, so a request a safety classifier declines is retried on another model.
+
+**Logging.** Every user message, model response, tool call, tool result and escalation is a row in `agent_steps`. The same log is replayed as the model's history on the next message, so the trace a care agent sees is exactly what the model saw.
+
 ## Run it
+
+Needs Docker Desktop and an [Anthropic API key](https://console.anthropic.com/).
 
 ```bash
 cp .env.example .env          # add ANTHROPIC_API_KEY (Twilio keys optional)
@@ -42,7 +60,57 @@ docker compose up --build
 curl localhost:8000/health    # {"status":"ok","customers":50,"active_outages":4}
 ```
 
+Talk to the agent:
+
+```bash
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+  -d '{"message": "My internet has been down for an hour. My number is 868-555-1000"}'
+```
+
+```json
+{
+  "conversation_id": 1,
+  "reply": "Sorry about the trouble, Kavita. Roadworks on Ariapita Ave cut a fibre cable, and that's causing an outage for fibre customers in Port of Spain, including you. Crews expect to have service back in about 2 hours. I've sent a text to your number with these details.",
+  "status": "open",
+  "tools_called": ["get_customer", "check_outages", "send_sms"],
+  "steps": ["... the full trace for this message ..."]
+}
+```
+
+Pass the returned `conversation_id` to continue the same conversation. Interactive API docs are at `localhost:8000/docs`.
+
 The database is created and seeded on first start. To reset it: `docker compose down -v`.
+
+### Configuration (`.env`)
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Yes, for `/chat` | Calls Claude |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | No | All three set: real SMS. Otherwise SMS is saved with status `simulated`. |
+| `SMS_REDIRECT_TO` | No | Sends every real SMS to this number instead. Twilio trial accounts can only text verified numbers, and the seeded customers are fake. |
+| `TOOLS_API_URL` | No | Where the agent finds the tools API. Defaults to `http://localhost:8000`. |
+
+## API
+
+| Endpoint | Tool | Does |
+|---|---|---|
+| `GET /customers/lookup?phone=` or `?account_no=` | `get_customer` | Finds a customer; accepts local phone formats like `555-1000` |
+| `GET /outages?area_id=&service_type=` | `check_outages` | Active outages in an area, with `has_active_outage`, `minutes_until_eta` and `eta_overdue` |
+| `POST /tickets` | `create_ticket` | Opens a fault ticket (category, priority, summary) |
+| `POST /sms` | `send_sms` | Texts the customer at the number on their account; every attempt is recorded |
+| `POST /chat` | | One customer message to the agent; returns the reply and trace |
+| `GET /health` | | Database check |
+
+## Development
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r api/requirements.txt
+docker compose up -d db       # tests use the seeded database
+cd api && pytest -q
+```
+
+The tests cover every endpoint and the agent loop. Agent tests use a scripted stand-in for the model, so they need no API key and run in CI on every push. Tests clean up any rows they write.
 
 ## Seed data
 
@@ -55,17 +123,21 @@ The database is created and seeded on first start. To reset it: `docker compose 
 | San Fernando | mobile | Cell site hardware fault |
 | Scarborough | fixed wireless | Storm damage to tower antenna |
 
-Outage times are relative to when the database starts, so the ETAs always look current.
+Outage start times and ETAs are set relative to when the database is first created. After a few hours the ETAs pass and show as overdue; run `docker compose down -v && docker compose up -d db` to reseed with fresh times.
 
 ## Project layout
 
 ```
-api/            FastAPI tools API + care agent (POST /chat)
-  app/main.py
+api/
+  app/
+    main.py       FastAPI app: tool endpoints and POST /chat
+    agent/        the care agent: loop, tools, prompt, conversation store
+    models/       Pydantic request/response models
+    helpers/      database, phone normalization, SMS delivery
   tests/
-db/             schema and seed SQL, loaded by Postgres on first start
-scripts/        seed generator
-.github/        CI: loads the DB and runs the tests on every push
+db/               schema and seed SQL, loaded by Postgres on first start
+scripts/          seed generator
+.github/          CI: loads the DB and runs the tests on every push
 ```
 
 ## Roadmap
@@ -74,7 +146,8 @@ scripts/        seed generator
 - [x] Four tool endpoints: `get_customer`, `check_outages`, `create_ticket`, `send_sms`
 - [x] Agent loop with tool calling and human-escalation rule
 - [x] Log every agent step to `agent_steps`
+- [ ] Twilio trial account for real SMS (code done; needs keys)
 - [ ] Next.js dashboard (conversation, tool trace, ticket queue)
-- [ ] Test set of ~15 scripted customer messages checking tool choice
+- [ ] Test set of ~15 scripted customer messages, scored on tool choice
 - [ ] Deploy and record a 2-minute demo
 - [ ] Stretch: expose the tools as an MCP server
