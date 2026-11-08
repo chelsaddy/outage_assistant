@@ -3,9 +3,10 @@ from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
 from app.helpers import db
+from app.helpers.auth import dashboard_headers
 from app.main import app
 
-client = TestClient(app)
+client = TestClient(app, headers=dashboard_headers())
 
 KAVITA_ID = 1  # first seeded customer
 

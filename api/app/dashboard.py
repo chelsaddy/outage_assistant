@@ -1,14 +1,16 @@
 """Read endpoints for the dashboard: conversations with their trace, the ticket queue, the SMS outbox.
 
 These are for people watching the agent, not for the agent itself, so none of them are tools.
+Every route requires the dashboard token (see app/helpers/auth.py).
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.helpers import db
+from app.helpers.auth import require_dashboard_token
 from app.models import (ConversationDetail, ConversationSummary, ConversationStatus, SmsOutboxItem,
                         TicketQueueItem, TicketStatus, TicketStatusUpdate)
 
-router = APIRouter(tags=["dashboard"])
+router = APIRouter(tags=["dashboard"], dependencies=[Depends(require_dashboard_token)])
 
 _CUSTOMER_COLUMNS = """
     cu.id AS customer_id, cu.full_name AS customer_name, cu.account_no, cu.phone,

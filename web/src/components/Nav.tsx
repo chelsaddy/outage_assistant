@@ -9,8 +9,14 @@ const LINKS = [
   { href: "/sms", label: "SMS outbox" },
 ];
 
+const signOut = async () => {
+  await fetch("/auth/logout", { method: "POST" }).catch(() => {});
+  window.location.assign("/login");
+};
+
 export function Nav() {
   const path = usePathname();
+  if (path === "/login") return null;
   return (
     <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex h-14 items-center gap-6 px-4">
@@ -33,6 +39,12 @@ export function Nav() {
             );
           })}
         </nav>
+        <button
+          onClick={signOut}
+          className="ml-auto rounded-md px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
+        >
+          Sign out
+        </button>
       </div>
     </header>
   );

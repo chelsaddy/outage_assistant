@@ -55,6 +55,12 @@ Some rules are enforced in code ([`tools.py`](api/app/agent/tools.py)), not just
 
 **Known gap: identity verification.** The agent takes the customer's word for who they are. Anyone who knows a customer's phone or account number can see that customer's name and outage status. A planned fix is for `get_customer` to ask the customer's account authorization question (the security question set on their account) and only unlock the account after a correct answer. This isn't built yet; see the roadmap.
 
+**Future: organization sign-in.** The dashboard has one shared staff account for now. The organization's LDAP directory or SSO provider (Azure AD/Entra ID, Okta, Google Workspace, any OIDC or SAML identity provider) can be integrated at a single point, [`web/src/lib/staffAuth.ts`](web/src/lib/staffAuth.ts):
+- **LDAP:** replace the body of `verifyCredentials()` with an LDAP bind.
+- **SSO:** replace the login form with a redirect to the identity provider, and have its callback call `createSession()` with the user's identity.
+
+Sessions, the middleware and the API token stay the same. Per-person accounts would also make the audit trail show who changed a ticket, and allow roles such as read-only staff. This isn't built yet; see the roadmap.
+
 **Logging.** Every user message, model response, tool call, tool result and escalation is a row in `agent_steps`. The same log is replayed as the model's history on the next message, so the trace a care agent sees is exactly what the model saw.
 
 ## Run it
@@ -90,8 +96,9 @@ With the API running:
 
 ```bash
 cd web
+cp .env.example .env.local    # set DASHBOARD_API_TOKEN (same as in ../.env), DASHBOARD_PASSWORD, SESSION_SECRET
 npm install
-npm run dev                   # http://localhost:3000
+npm run dev                   # http://localhost:3000, sign in with DASHBOARD_USER / DASHBOARD_PASSWORD
 ```
 
 - **Conversations:** every conversation, newest activity first. Open one to read the transcript with each tool call and its result inline, plus the customer and any tickets. Type in the box to talk to the agent as a customer.
@@ -99,6 +106,8 @@ npm run dev                   # http://localhost:3000
 - **SMS outbox:** every text the agent sent, including simulated ones.
 
 The browser calls `/api/*` on the dashboard, and Next.js forwards those requests to the API (`API_URL`, default `http://localhost:8000`), so the API needs no CORS setup. Pages refresh every few seconds.
+
+**Staff login.** Every dashboard page and `/api/*` call needs a signed-in session ([`middleware.ts`](web/src/middleware.ts)). Signing in sets a signed, `HttpOnly`, `SameSite=Lax` cookie that lasts 8 hours. When a request is forwarded to the API, the Next.js server adds `DASHBOARD_API_TOKEN` and drops the session cookie. The browser never sees the token, so calling the API's dashboard routes directly returns `401`. For now there is one shared staff account, set in `web/.env.local`.
 
 Pass the returned `conversation_id` to continue the same conversation. Interactive API docs are at `localhost:8000/docs`.
 
@@ -113,11 +122,24 @@ The database is created and seeded on first start. To reset it: `docker compose 
 | `SMS_REDIRECT_TO` | No | Sends every real SMS to this number instead. Twilio trial accounts can only text verified numbers, and the seeded customers are fake. |
 | `TOOLS_API_TOKEN` | No | Service token the agent sends to the tool endpoints. If unset, a random one is made at startup; set it when the agent runs in a separate process or with more than one worker. |
 | `TOOLS_API_URL` | No | Where the agent finds the tools API. Defaults to `http://localhost:8000`. |
-| `API_URL` (dashboard) | No | Where the dashboard forwards `/api/*` requests. Defaults to `http://localhost:8000`. |
+| `DASHBOARD_API_TOKEN` | Yes, for the dashboard | Token the dashboard's server sends to the dashboard endpoints. Must match the value in `web/.env.local`. |
+
+The dashboard reads its own `web/.env.local` (template: [`web/.env.example`](web/.env.example)):
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `API_URL` | No | Where the dashboard forwards `/api/*` requests. Defaults to `http://localhost:8000`. Read at build time. |
+| `DASHBOARD_API_TOKEN` | Yes | Same value as in the API's `.env` |
+| `DASHBOARD_USER`, `DASHBOARD_PASSWORD` | Yes | The staff sign-in |
+| `SESSION_SECRET` | Yes | Signs session cookies; at least 32 characters. Changing it signs everyone out. |
 
 ## API
 
-The four tool endpoints are for the agent only. They require `Authorization: Bearer $TOOLS_API_TOKEN` and return `401` otherwise.
+Each caller has its own token, and a token only opens its own routes ([`auth.py`](api/app/helpers/auth.py)). A missing or wrong token returns `401`.
+
+- **Tool endpoints** are for the agent only: `Authorization: Bearer $TOOLS_API_TOKEN`.
+- **Dashboard endpoints** are for the dashboard's server only: `Authorization: Bearer $DASHBOARD_API_TOKEN`.
+- `POST /chat` and `GET /health` are public. `/chat` is the customer channel.
 
 | Endpoint | Tool | Does |
 |---|---|---|
@@ -182,7 +204,9 @@ scripts/          seed generator
 - [x] Log every agent step to `agent_steps`
 - [x] SMS delivery: simulated by default (Twilio sign-up rejects Trinidad and Tobago numbers); real Twilio sending works once keys are set
 - [x] Next.js dashboard (conversation, tool trace, ticket queue, SMS outbox)
+- [x] Security: service tokens per caller, agent bound to the identified customer, staff login on the dashboard
 - [ ] Verify the customer with their account authorization question before revealing account details or acting on the account
+- [ ] Sign staff in through the organization's LDAP directory or SSO provider (OIDC/SAML) instead of the shared dashboard account, with per-person accounts and roles
 - [ ] Test set of ~15 scripted customer messages, scored on tool choice
 - [ ] Deploy and record a 2-minute demo
 - [ ] Stretch: expose the tools as an MCP server

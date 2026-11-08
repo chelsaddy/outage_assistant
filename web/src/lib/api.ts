@@ -1,4 +1,5 @@
-// Types mirror the Pydantic models in api/app/models. Requests go through the /api rewrite.
+// Types mirror the Pydantic models in api/app/models. Requests go through the /api rewrite;
+// src/middleware.ts checks the staff session and adds the API token on the server.
 
 export type StepKind = "user_message" | "assistant_message" | "tool_call" | "tool_result" | "escalation";
 
@@ -93,6 +94,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...init?.headers },
     cache: "no-store",
   });
+  if (res.status === 401 && res.headers.get("x-session-expired")) {
+    // Session ended (expired or signed out elsewhere): back to the login page, then here again.
+    window.location.assign(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
