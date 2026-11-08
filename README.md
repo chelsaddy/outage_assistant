@@ -146,7 +146,7 @@ scripts/          seed generator
 - [x] Four tool endpoints: `get_customer`, `check_outages`, `create_ticket`, `send_sms`
 - [x] Agent loop with tool calling and human-escalation rule
 - [x] Log every agent step to `agent_steps`
-- [ ] Twilio trial account for real SMS (code done; needs keys)
+- [x] SMS delivery: simulated by default (Twilio sign-up rejects Trinidad and Tobago numbers); real Twilio sending works once keys are set
 - [ ] Next.js dashboard (conversation, tool trace, ticket queue)
 - [ ] Test set of ~15 scripted customer messages, scored on tool choice
 - [ ] Deploy and record a 2-minute demo
