@@ -8,15 +8,19 @@ The agent calls these endpoints as tools:
 
 and the care agent is exposed at:
   POST /chat               -> one customer message in, the agent's reply (and its trace) out
+
+and the dashboard reads from app/dashboard.py (conversations, ticket queue, SMS outbox).
 """
 import anthropic
 from fastapi import FastAPI, HTTPException, Query
 
 from app.agent import ConversationNotFound, run_turn
+from app.dashboard import router as dashboard_router
 from app.helpers import db, normalize_phone, send_sms_message
 from app.models import ChatRequest, ChatResponse, Customer, OutageCheck, ServiceType, SmsCreate, SmsMessage, Ticket, TicketCreate
 
 app = FastAPI(title="Telecom Outage Assistant: Tools API")
+app.include_router(dashboard_router)
 
 
 @app.get("/health")

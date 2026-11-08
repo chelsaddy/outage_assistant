@@ -33,7 +33,7 @@ The model decides which tool to call and when; the tools API does the work. The 
 | Tools API | FastAPI, Pydantic |
 | Data | PostgreSQL 16 |
 | SMS | Twilio REST API (simulated when no keys are set) |
-| Dashboard | Next.js on Vercel *(in progress)* |
+| Dashboard | Next.js 15, React 19, Tailwind CSS |
 | Ops | Docker Compose, GitHub Actions CI |
 
 ## How the agent works
@@ -77,6 +77,22 @@ curl -s localhost:8000/chat -H 'content-type: application/json' \
 }
 ```
 
+### Dashboard
+
+With the API running:
+
+```bash
+cd web
+npm install
+npm run dev                   # http://localhost:3000
+```
+
+- **Conversations:** every conversation, newest activity first. Open one to read the transcript with each tool call and its result inline, plus the customer and any tickets. Type in the box to talk to the agent as a customer.
+- **Ticket queue:** open tickets, high priority first. Change a ticket's status from the table.
+- **SMS outbox:** every text the agent sent, including simulated ones.
+
+The browser calls `/api/*` on the dashboard, and Next.js forwards those requests to the API (`API_URL`, default `http://localhost:8000`), so the API needs no CORS setup. Pages refresh every few seconds.
+
 Pass the returned `conversation_id` to continue the same conversation. Interactive API docs are at `localhost:8000/docs`.
 
 The database is created and seeded on first start. To reset it: `docker compose down -v`.
@@ -89,6 +105,7 @@ The database is created and seeded on first start. To reset it: `docker compose 
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | No | All three set: real SMS. Otherwise SMS is saved with status `simulated`. |
 | `SMS_REDIRECT_TO` | No | Sends every real SMS to this number instead. Twilio trial accounts can only text verified numbers, and the seeded customers are fake. |
 | `TOOLS_API_URL` | No | Where the agent finds the tools API. Defaults to `http://localhost:8000`. |
+| `API_URL` (dashboard) | No | Where the dashboard forwards `/api/*` requests. Defaults to `http://localhost:8000`. |
 
 ## API
 
@@ -100,6 +117,11 @@ The database is created and seeded on first start. To reset it: `docker compose 
 | `POST /sms` | `send_sms` | Texts the customer at the number on their account; every attempt is recorded |
 | `POST /chat` | | One customer message to the agent; returns the reply and trace |
 | `GET /health` | | Database check |
+| `GET /conversations?status=` | | Dashboard: conversations with customer, last message and tool-call count |
+| `GET /conversations/{id}` | | Dashboard: one conversation's full step log and tickets |
+| `GET /tickets?status=` | | Dashboard: ticket queue, high priority first |
+| `PATCH /tickets/{id}` | | Dashboard: set a ticket's status (`open`, `in_progress`, `closed`) |
+| `GET /sms` | | Dashboard: SMS outbox, newest first |
 
 ## Development
 
@@ -131,13 +153,15 @@ Outage start times and ETAs are set relative to when the database is first creat
 api/
   app/
     main.py       FastAPI app: tool endpoints and POST /chat
+    dashboard.py  read endpoints for the dashboard
     agent/        the care agent: loop, tools, prompt, conversation store
     models/       Pydantic request/response models
     helpers/      database, phone normalization, SMS delivery
   tests/
+web/              Next.js dashboard
 db/               schema and seed SQL, loaded by Postgres on first start
 scripts/          seed generator
-.github/          CI: loads the DB and runs the tests on every push
+.github/          CI: runs the API tests against a seeded DB, and lints and builds the dashboard
 ```
 
 ## Roadmap
@@ -147,7 +171,7 @@ scripts/          seed generator
 - [x] Agent loop with tool calling and human-escalation rule
 - [x] Log every agent step to `agent_steps`
 - [x] SMS delivery: simulated by default (Twilio sign-up rejects Trinidad and Tobago numbers); real Twilio sending works once keys are set
-- [ ] Next.js dashboard (conversation, tool trace, ticket queue)
+- [x] Next.js dashboard (conversation, tool trace, ticket queue, SMS outbox)
 - [ ] Test set of ~15 scripted customer messages, scored on tool choice
 - [ ] Deploy and record a 2-minute demo
 - [ ] Stretch: expose the tools as an MCP server
