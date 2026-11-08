@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createSession, SESSION_COOKIE, SESSION_MAX_AGE } from "@/lib/session";
+import { clientIp, LOGIN_FAILURES_GLOBAL, LOGIN_FAILURES_PER_IP, tooMany } from "@/lib/rateLimit";
 import { loginConfigured, verifyCredentials } from "@/lib/staffAuth";
+
+const TOO_MANY = "Too many failed sign-in attempts. Try again later.";
 
 export async function POST(req: Request) {
   if (!loginConfigured()) {
@@ -9,6 +12,10 @@ export async function POST(req: Request) {
       { status: 503 },
     );
   }
+
+  const ip = clientIp(req);
+  const wait = Math.max(LOGIN_FAILURES_PER_IP.retryAfter(ip), LOGIN_FAILURES_GLOBAL.retryAfter("all"));
+  if (wait) return tooMany(wait, TOO_MANY);
 
   let username = "";
   let password = "";
@@ -21,7 +28,12 @@ export async function POST(req: Request) {
   }
 
   const user = await verifyCredentials(username, password);
-  if (!user) return NextResponse.json({ detail: "Wrong username or password." }, { status: 401 });
+  if (!user) {
+    LOGIN_FAILURES_PER_IP.record(ip);
+    LOGIN_FAILURES_GLOBAL.record("all");
+    return NextResponse.json({ detail: "Wrong username or password." }, { status: 401 });
+  }
+  LOGIN_FAILURES_PER_IP.clear(ip);
 
   const https = req.headers.get("x-forwarded-proto") === "https" || new URL(req.url).protocol === "https:";
   const res = NextResponse.json({ user });

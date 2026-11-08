@@ -11,16 +11,24 @@ and the care agent is exposed at:
 
 and the dashboard reads from app/dashboard.py (conversations, ticket queue, SMS outbox).
 """
+import os
+
 import anthropic
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 
 from app.agent import ConversationNotFound, run_turn
 from app.dashboard import router as dashboard_router
 from app.helpers import db, normalize_phone, send_sms_message
-from app.helpers.auth import require_service_token
+from app.helpers.auth import is_dashboard, require_service_token
+from app.helpers.ratelimit import CHAT_GLOBAL_PER_DAY, CHAT_PER_DAY, CHAT_PER_MINUTE, check_and_record
 from app.models import ChatRequest, ChatResponse, Customer, OutageCheck, ServiceType, SmsCreate, SmsMessage, Ticket, TicketCreate
 
-app = FastAPI(title="Telecom Outage Assistant: Tools API")
+# Interactive docs and the OpenAPI schema are off unless ENABLE_API_DOCS=true: they map every
+# endpoint for anyone who finds the API.
+_docs = os.environ.get("ENABLE_API_DOCS", "").lower() == "true"
+app = FastAPI(title="Telecom Outage Assistant: Tools API",
+              docs_url="/docs" if _docs else None, redoc_url=None,
+              openapi_url="/openapi.json" if _docs else None)
 app.include_router(dashboard_router)
 
 # Tool endpoints are for the agent only: they require the service token.
@@ -144,8 +152,9 @@ def send_sms(sms: SmsCreate):
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, request: Request, authorization: str | None = Header(None, include_in_schema=False)):
     """Send a customer message to the agent. Omit conversation_id to start a new conversation."""
+    _limit_chat(request, authorization)
     try:
         return run_turn(req.conversation_id, req.message)
     except ConversationNotFound:
@@ -156,3 +165,20 @@ def chat(req: ChatRequest):
         raise HTTPException(503, "The model API is rate limited. Try again shortly.")
     except anthropic.APIStatusError as exc:
         raise HTTPException(502, f"Model API error ({exc.status_code}).")
+
+
+def _limit_chat(request: Request, authorization: str | None) -> None:
+    """Rate-limit /chat: per client per minute and per day, plus a daily cap for everyone together.
+
+    Customers are keyed by their IP address. Signed-in staff come through the dashboard's server, so
+    they all share its IP; they skip the per-client limits here and are limited per person by the
+    dashboard instead. Everyone counts toward the global cap, which bounds model spend.
+    Behind a reverse proxy, run uvicorn with --proxy-headers so request.client is the real client.
+    """
+    limits = [(CHAT_GLOBAL_PER_DAY, "all")]
+    if not is_dashboard(authorization):
+        client = request.client.host if request.client else "unknown"
+        limits += [(CHAT_PER_MINUTE, client), (CHAT_PER_DAY, client)]
+    if wait := check_and_record(limits):
+        raise HTTPException(429, "Too many messages. Please wait a moment and try again.",
+                            headers={"Retry-After": str(wait)})

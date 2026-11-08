@@ -3,7 +3,9 @@
 // - /api/* without a session gets 401. With one, the request is forwarded to the FastAPI API
 //   (see the rewrite in next.config.ts) carrying DASHBOARD_API_TOKEN. The token is added here on
 //   the server, so the browser never sees it, and the session cookie is not forwarded.
+// - POST /api/chat is rate-limited per staff member.
 import { NextResponse, type NextRequest } from "next/server";
+import { STAFF_CHAT_PER_MINUTE, tooMany } from "@/lib/rateLimit";
 import { readSession, SESSION_COOKIE } from "@/lib/session";
 
 export function middleware(req: NextRequest) {
@@ -16,6 +18,12 @@ export function middleware(req: NextRequest) {
         { detail: "Your session has expired. Sign in again." },
         { status: 401, headers: { "x-session-expired": "1" } },
       );
+    }
+    if (pathname === "/api/chat" && req.method === "POST") {
+      // Staff skip the API's per-IP chat limits (they all share this server's IP), so limit per person here.
+      const wait = STAFF_CHAT_PER_MINUTE.retryAfter(session.user);
+      if (wait) return tooMany(wait, "You're sending messages too quickly. Wait a moment and try again.");
+      STAFF_CHAT_PER_MINUTE.record(session.user);
     }
     const headers = new Headers(req.headers);
     headers.set("authorization", `Bearer ${process.env.DASHBOARD_API_TOKEN ?? ""}`);

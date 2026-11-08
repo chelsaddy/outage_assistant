@@ -33,10 +33,19 @@ DASHBOARD_API_TOKEN = _token("DASHBOARD_API_TOKEN",
                              "The dashboard can't reach the API until it is set in .env and web/.env.local.")
 
 
+def _matches(authorization: str | None, expected: str) -> bool:
+    scheme, _, token = (authorization or "").partition(" ")
+    return scheme.lower() == "bearer" and secrets.compare_digest(token.encode(), expected.encode())
+
+
+def is_dashboard(authorization: str | None) -> bool:
+    """True if the request carries the dashboard token (a signed-in staff member, via Next.js)."""
+    return _matches(authorization, DASHBOARD_API_TOKEN)
+
+
 def _bearer(expected: str) -> Callable[..., None]:
     def check(authorization: str | None = Header(None, include_in_schema=False)) -> None:
-        scheme, _, token = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not secrets.compare_digest(token.encode(), expected.encode()):
+        if not _matches(authorization, expected):
             raise HTTPException(401, "Missing or invalid token.", headers={"WWW-Authenticate": "Bearer"})
     return check
 
