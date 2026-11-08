@@ -2,9 +2,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.helpers import db
+from app.helpers.auth import service_headers
 from app.main import app
 
-client = TestClient(app)
+client = TestClient(app, headers=service_headers())
 
 KAVITA_ID = 1  # first seeded customer
 

@@ -12,15 +12,19 @@ and the care agent is exposed at:
 and the dashboard reads from app/dashboard.py (conversations, ticket queue, SMS outbox).
 """
 import anthropic
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 
 from app.agent import ConversationNotFound, run_turn
 from app.dashboard import router as dashboard_router
 from app.helpers import db, normalize_phone, send_sms_message
+from app.helpers.auth import require_service_token
 from app.models import ChatRequest, ChatResponse, Customer, OutageCheck, ServiceType, SmsCreate, SmsMessage, Ticket, TicketCreate
 
 app = FastAPI(title="Telecom Outage Assistant: Tools API")
 app.include_router(dashboard_router)
+
+# Tool endpoints are for the agent only: they require the service token.
+AGENT_ONLY = [Depends(require_service_token)]
 
 
 @app.get("/health")
@@ -31,7 +35,7 @@ def health():
     return {"status": "ok", "customers": customers, "active_outages": active}
 
 
-@app.get("/customers/lookup", response_model=Customer)
+@app.get("/customers/lookup", response_model=Customer, dependencies=AGENT_ONLY)
 def get_customer(
     phone: str | None = Query(None, description="Customer phone number, any common format"),
     account_no: str | None = Query(None, description="Account number, e.g. ACC-100001"),
@@ -61,7 +65,7 @@ def get_customer(
     return row
 
 
-@app.get("/outages", response_model=OutageCheck)
+@app.get("/outages", response_model=OutageCheck, dependencies=AGENT_ONLY)
 def check_outages(
     area_id: int = Query(..., description="Service area id, from get_customer"),
     service_type: ServiceType | None = Query(None, description="Only outages affecting this service"),
@@ -95,7 +99,7 @@ def check_outages(
     }
 
 
-@app.post("/tickets", response_model=Ticket, status_code=201)
+@app.post("/tickets", response_model=Ticket, status_code=201, dependencies=AGENT_ONLY)
 def create_ticket(ticket: TicketCreate):
     """Open a fault ticket for a customer (used when no known outage explains the problem)."""
     with db() as conn:
@@ -116,7 +120,7 @@ def create_ticket(ticket: TicketCreate):
         ).fetchone()
 
 
-@app.post("/sms", response_model=SmsMessage, status_code=201)
+@app.post("/sms", response_model=SmsMessage, status_code=201, dependencies=AGENT_ONLY)
 def send_sms(sms: SmsCreate):
     """Text a customer an update. Every attempt is recorded, including failures."""
     body = sms.body.strip()

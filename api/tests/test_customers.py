@@ -1,9 +1,10 @@
 from fastapi.testclient import TestClient
 
 from app.helpers import normalize_phone
+from app.helpers.auth import service_headers
 from app.main import app
 
-client = TestClient(app)
+client = TestClient(app, headers=service_headers())
 
 # From db/02_seed.sql: the first seeded customer.
 KAVITA = {"account_no": "ACC-100001", "full_name": "Kavita Joseph", "phone": "+18685551000"}

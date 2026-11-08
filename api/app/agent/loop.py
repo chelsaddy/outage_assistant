@@ -11,6 +11,7 @@ import httpx
 from app.agent.prompt import EFFORT, MAX_ITERATIONS, MAX_TOKENS, MODEL, SYSTEM_PROMPT
 from app.agent.store import ConversationStore
 from app.agent.tools import TOOL_DEFINITIONS, ToolExecutor
+from app.helpers.auth import service_headers
 
 TOOLS_API_URL = os.environ.get("TOOLS_API_URL", "http://localhost:8000")
 
@@ -23,7 +24,7 @@ def default_llm() -> anthropic.Anthropic:
 
 
 def default_api() -> httpx.Client:
-    return httpx.Client(base_url=TOOLS_API_URL, timeout=15)
+    return httpx.Client(base_url=TOOLS_API_URL, headers=service_headers(), timeout=15)
 
 
 def _text_of(content: list) -> str:

@@ -104,10 +104,13 @@ The database is created and seeded on first start. To reset it: `docker compose 
 | `ANTHROPIC_API_KEY` | Yes, for `/chat` | Calls Claude |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | No | All three set: real SMS. Otherwise SMS is saved with status `simulated`. |
 | `SMS_REDIRECT_TO` | No | Sends every real SMS to this number instead. Twilio trial accounts can only text verified numbers, and the seeded customers are fake. |
+| `TOOLS_API_TOKEN` | No | Service token the agent sends to the tool endpoints. If unset, a random one is made at startup; set it when the agent runs in a separate process or with more than one worker. |
 | `TOOLS_API_URL` | No | Where the agent finds the tools API. Defaults to `http://localhost:8000`. |
 | `API_URL` (dashboard) | No | Where the dashboard forwards `/api/*` requests. Defaults to `http://localhost:8000`. |
 
 ## API
+
+The four tool endpoints are for the agent only. They require `Authorization: Bearer $TOOLS_API_TOKEN` and return `401` otherwise.
 
 | Endpoint | Tool | Does |
 |---|---|---|

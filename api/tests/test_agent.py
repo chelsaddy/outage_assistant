@@ -13,9 +13,10 @@ from fastapi.testclient import TestClient
 from app.agent import run_turn
 from app.agent.prompt import MAX_ITERATIONS
 from app.helpers import db
+from app.helpers.auth import service_headers
 from app.main import app
 
-api = TestClient(app)
+api = TestClient(app, headers=service_headers())
 
 KAVITA = {"id": 1, "phone": "+18685551000", "area_id": 1}  # Port of Spain, fibre: active outage
 ANDRE = {"id": 2, "phone": "+18685551001", "area_id": 2}   # Diego Martin, fibre: no outage

@@ -3,9 +3,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.helpers import db, sms as sms_helper
+from app.helpers.auth import service_headers
 from app.main import app
 
-client = TestClient(app)
+client = TestClient(app, headers=service_headers())
 
 KAVITA_ID, KAVITA_PHONE = 1, "+18685551000"
 TWILIO_ENV = {"TWILIO_ACCOUNT_SID": "ACtest", "TWILIO_AUTH_TOKEN": "secret", "TWILIO_FROM_NUMBER": "+15005550006"}

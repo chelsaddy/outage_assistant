@@ -1,8 +1,9 @@
 from fastapi.testclient import TestClient
 
+from app.helpers.auth import service_headers
 from app.main import app
 
-client = TestClient(app)
+client = TestClient(app, headers=service_headers())
 
 # From db/02_seed.sql (area ids follow insert order).
 PORT_OF_SPAIN = 1  # active fibre outage
