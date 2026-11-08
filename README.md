@@ -48,6 +48,11 @@ The model decides which tool to call and when; the tools API does the work. The 
 
 **Guardrails.** Tool inputs use strict JSON schemas. The loop stops after 10 model calls, and a refusal, a cut-off response or a runaway loop all escalate to a human rather than fail. Server-side model fallback is on, so a request a safety classifier declines is retried on another model.
 
+Some rules are enforced in code ([`tools.py`](api/app/agent/tools.py)), not just in the prompt, so a customer can't talk the agent around them:
+- A conversation is bound to the first customer it identifies. `create_ticket` and `send_sms` only work for that customer.
+- If a later `get_customer` finds a different customer, the agent doesn't switch accounts and doesn't see the second customer's details. The conversation escalates to a human instead.
+- Once a conversation is escalated, no more tools run.
+
 **Logging.** Every user message, model response, tool call, tool result and escalation is a row in `agent_steps`. The same log is replayed as the model's history on the next message, so the trace a care agent sees is exactly what the model saw.
 
 ## Run it

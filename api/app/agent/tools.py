@@ -100,8 +100,17 @@ class ToolResult:
     is_error: bool = False
 
 
+HANDED_OFF = "This conversation has been handed to a human care agent. Take no further action."
+
+
 class ToolExecutor:
-    """Runs one tool call against the tools API on behalf of a conversation."""
+    """Runs one tool call against the tools API on behalf of a conversation.
+
+    Guardrails enforced here, in code, whatever the model was told or talked into:
+    - a conversation is bound to the first customer it identifies; tickets and SMS can only
+      go to that customer, and identifying a different customer escalates instead of switching;
+    - once a conversation is escalated, no further tools run.
+    """
 
     def __init__(self, api: httpx.Client, store: ConversationStore):
         self.api = api
@@ -111,6 +120,8 @@ class ToolExecutor:
         handler = getattr(self, f"_{name}", None)
         if handler is None:
             return ToolResult(f"Unknown tool '{name}'.", is_error=True)
+        if self.store.status() == "escalated":
+            return ToolResult(HANDED_OFF, is_error=True)
         try:
             return handler(**args)
         except httpx.HTTPError as exc:
@@ -128,23 +139,53 @@ class ToolExecutor:
             detail = r.text
         return ToolResult(f"HTTP {r.status_code}: {json.dumps(detail)}", is_error=True)
 
+    def _check_customer(self, customer_id: int) -> ToolResult | None:
+        """Error result unless customer_id is the customer this conversation is bound to."""
+        bound = self.store.customer_id()
+        if bound is None:
+            return ToolResult("No customer identified yet. Call get_customer first.", is_error=True)
+        if customer_id != bound:
+            return ToolResult(f"customer_id {customer_id} is not the customer in this conversation. "
+                              f"Use customer_id {bound}.", is_error=True)
+        return None
+
     def _get_customer(self, phone: str | None = None, account_no: str | None = None) -> ToolResult:
         params = {k: v for k, v in {"phone": phone, "account_no": account_no}.items() if v}
         result = self._result(self.api.get("/customers/lookup", params=params))
-        if not result.is_error:
-            self.store.set_customer(json.loads(result.content)["id"])
+        if result.is_error:
+            return result
+
+        found = json.loads(result.content)["id"]
+        bound = self.store.customer_id()
+        if bound is None:
+            self.store.set_customer(found)
+        elif found != bound:
+            # Don't reveal the second account, and don't switch to it: hand off to a person.
+            self._escalate_to_human(
+                "low_confidence",
+                f"Customer gave details for a second account (customer id {found}) after being "
+                f"identified as customer id {bound}. Verify who they are before acting on either.")
+            return ToolResult(json.dumps({
+                "error": "These details belong to a different account than the one already identified "
+                         "in this conversation. The conversation has been handed to a human.",
+                "next": "Tell the customer a member of the team will follow up. Take no further action.",
+            }), is_error=True)
         return result
 
     def _check_outages(self, area_id: int, service_type: str) -> ToolResult:
         return self._result(self.api.get("/outages", params={"area_id": area_id, "service_type": service_type}))
 
     def _create_ticket(self, customer_id: int, category: str, priority: str, summary: str) -> ToolResult:
+        if error := self._check_customer(customer_id):
+            return error
         return self._result(self.api.post("/tickets", json={
             "customer_id": customer_id, "category": category, "priority": priority,
             "summary": summary, "conversation_id": self.store.conversation_id,
         }))
 
     def _send_sms(self, customer_id: int, body: str) -> ToolResult:
+        if error := self._check_customer(customer_id):
+            return error
         return self._result(self.api.post("/sms", json={"customer_id": customer_id, "body": body}))
 
     def _escalate_to_human(self, reason: str, summary: str) -> ToolResult:

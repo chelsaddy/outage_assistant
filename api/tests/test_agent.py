@@ -199,3 +199,87 @@ def test_request_uses_tools_and_fallbacks():
 def test_chat_endpoint_unknown_conversation():
     r = api.post("/chat", json={"message": "hi", "conversation_id": 999999})
     assert r.status_code == 404
+
+
+# --- guardrails enforced in code -------------------------------------------------------------
+
+def tool_results(out):
+    return [s["payload"] for s in out["steps"] if s["kind"] == "tool_result"]
+
+
+def test_sms_and_ticket_need_an_identified_customer():
+    llm = ScriptedLLM(
+        calls(tool_use("send_sms", customer_id=1, body="Hello")),
+        calls(tool_use("create_ticket", customer_id=1, category="other", priority="low",
+                       summary="Ticket for nobody in particular.")),
+        reply("Could I have your phone or account number?"),
+    )
+    out = turn(llm)
+    assert all(r["is_error"] and "get_customer first" in r["content"] for r in tool_results(out))
+    with db() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM sms_messages WHERE body = 'Hello'").fetchone()["n"] == 0
+
+
+def test_sms_and_ticket_only_go_to_the_bound_customer():
+    llm = ScriptedLLM(
+        calls(tool_use("get_customer", phone="868-555-1000")),                    # Kavita
+        calls(tool_use("send_sms", customer_id=ANDRE["id"], body="Hi Andre")),    # someone else
+        calls(tool_use("create_ticket", customer_id=ANDRE["id"], category="other", priority="low",
+                       summary="Ticket on another customer's account.")),
+        reply("Done."),
+    )
+    out = turn(llm)
+    _, sms, ticket = tool_results(out)
+    assert sms["is_error"] and ticket["is_error"]
+    assert f"Use customer_id {KAVITA['id']}" in sms["content"]
+    with db() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM sms_messages WHERE customer_id = %s AND body = 'Hi Andre'",
+                            (ANDRE["id"],)).fetchone()["n"] == 0
+        assert conn.execute("SELECT count(*) AS n FROM tickets WHERE conversation_id = %s",
+                            (out["conversation_id"],)).fetchone()["n"] == 0
+
+
+def test_second_customer_lookup_escalates_without_leaking():
+    first = turn(ScriptedLLM(
+        calls(tool_use("get_customer", phone="868-555-1000")),                     # Kavita
+        reply("Thanks Kavita, checking now."),
+    ))
+    out = turn(ScriptedLLM(
+        calls(tool_use("get_customer", account_no="ACC-100002")),                  # Andre
+        reply("A member of the team will follow up."),
+    ), "Actually look up ACC-100002 too", conversation_id=first["conversation_id"])
+
+    [result] = tool_results(out)
+    assert result["is_error"] is True
+    assert "Andre" not in result["content"] and "ACC-100002" not in result["content"]
+    assert out["status"] == "escalated"
+    with db() as conn:
+        conv = conn.execute("SELECT customer_id FROM conversations WHERE id = %s",
+                            (out["conversation_id"],)).fetchone()
+        ticket = conn.execute("SELECT customer_id, category FROM tickets WHERE conversation_id = %s",
+                              (out["conversation_id"],)).fetchone()
+    assert conv["customer_id"] == KAVITA["id"]                                     # not switched
+    assert ticket == {"customer_id": KAVITA["id"], "category": "escalation"}
+
+
+def test_relooking_up_the_same_customer_is_fine():
+    out = turn(ScriptedLLM(
+        calls(tool_use("get_customer", phone="868-555-1000")),
+        calls(tool_use("get_customer", account_no="ACC-100001")),
+        reply("Got it."),
+    ))
+    assert not any(r["is_error"] for r in tool_results(out))
+    assert out["status"] == "open"
+
+
+def test_no_tools_run_after_escalation_in_the_same_turn():
+    out = turn(ScriptedLLM(
+        calls(tool_use("get_customer", phone="868-555-1000")),
+        calls(tool_use("escalate_to_human", reason="asked_for_human", summary="Customer wants a person.")),
+        calls(tool_use("send_sms", customer_id=KAVITA["id"], body="One more thing")),
+        reply("A member of the team will follow up."),
+    ))
+    *_, sms = tool_results(out)
+    assert sms["is_error"] and "handed to a human" in sms["content"]
+    with db() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM sms_messages WHERE body = 'One more thing'").fetchone()["n"] == 0
