@@ -5,11 +5,16 @@ The agent calls these endpoints as tools:
   GET  /outages?area_id=   -> check_outages
   POST /tickets            -> create_ticket
   POST /sms                -> send_sms
+
+and the care agent is exposed at:
+  POST /chat               -> one customer message in, the agent's reply (and its trace) out
 """
+import anthropic
 from fastapi import FastAPI, HTTPException, Query
 
+from app.agent import ConversationNotFound, run_turn
 from app.helpers import db, normalize_phone, send_sms_message
-from app.models import Customer, OutageCheck, ServiceType, SmsCreate, SmsMessage, Ticket, TicketCreate
+from app.models import ChatRequest, ChatResponse, Customer, OutageCheck, ServiceType, SmsCreate, SmsMessage, Ticket, TicketCreate
 
 app = FastAPI(title="Telecom Outage Assistant: Tools API")
 
@@ -128,3 +133,18 @@ def send_sms(sms: SmsCreate):
             (sms.customer_id, result.sent_to, body, result.status, result.provider_sid),
         ).fetchone()
     return {**row, "error": result.error}
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(req: ChatRequest):
+    """Send a customer message to the agent. Omit conversation_id to start a new conversation."""
+    try:
+        return run_turn(req.conversation_id, req.message)
+    except ConversationNotFound:
+        raise HTTPException(404, f"No conversation with id {req.conversation_id}.")
+    except anthropic.APIConnectionError:
+        raise HTTPException(503, "Could not reach the model API. Try again shortly.")
+    except anthropic.RateLimitError:
+        raise HTTPException(503, "The model API is rate limited. Try again shortly.")
+    except anthropic.APIStatusError as exc:
+        raise HTTPException(502, f"Model API error ({exc.status_code}).")

@@ -60,7 +60,7 @@ Outage times are relative to when the database starts, so the ETAs always look c
 ## Project layout
 
 ```
-api/            FastAPI tools API (+ agent, coming next)
+api/            FastAPI tools API + care agent (POST /chat)
   app/main.py
   tests/
 db/             schema and seed SQL, loaded by Postgres on first start
@@ -72,8 +72,8 @@ scripts/        seed generator
 
 - [x] Repo, Docker Compose, schema, seed data, CI
 - [x] Four tool endpoints: `get_customer`, `check_outages`, `create_ticket`, `send_sms`
-- [ ] Agent loop with tool calling and human-escalation rule
-- [ ] Log every agent step to `agent_steps`
+- [x] Agent loop with tool calling and human-escalation rule
+- [x] Log every agent step to `agent_steps`
 - [ ] Next.js dashboard (conversation, tool trace, ticket queue)
 - [ ] Test set of ~15 scripted customer messages checking tool choice
 - [ ] Deploy and record a 2-minute demo
