@@ -33,5 +33,20 @@ services:
       db:
         condition: service_healthy
 
+  web:
+    build:
+      context: ./web
+      args:
+        API_URL: http://api:8000           # where the dashboard forwards /api/* (fixed at build time)
+    env_file: web/.env.local               # DASHBOARD_API_TOKEN, DASHBOARD_USER/PASSWORD, SESSION_SECRET
+    ports:
+      - "127.0.0.1:3000:3000"
+    read_only: true
+    tmpfs: [/tmp, /app/.next/cache]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    depends_on:
+      - api
+
 volumes:
   pgdata:

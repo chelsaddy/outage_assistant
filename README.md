@@ -58,7 +58,7 @@ Some rules are enforced in code ([`tools.py`](api/app/agent/tools.py)), not just
 
 ## Run it
 
-Needs Docker Desktop, Node.js 22 and an [Anthropic API key](https://console.anthropic.com/).
+Needs Docker Desktop and an [Anthropic API key](https://console.anthropic.com/). Node.js 22 is only needed to run the dashboard outside Docker.
 
 **1. Configure the API.** Copy the template and fill it in. Generate each secret with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`.
 
@@ -71,21 +71,34 @@ cp .env.example .env
 # DASHBOARD_API_TOKEN   a generated secret (also goes in web/.env.local)
 ```
 
-**2. Start the database and API.**
+**2. Configure the dashboard.**
+
+```bash
+cp web/.env.example web/.env.local
+# DASHBOARD_API_TOKEN   the same value as in .env
+# DASHBOARD_PASSWORD    the staff sign-in password (DASHBOARD_USER defaults to admin)
+# SESSION_SECRET        a generated secret, at least 32 characters
+```
+
+**3. Start everything:** database, API and dashboard.
 
 ```bash
 docker compose up --build
 curl localhost:8000/health    # {"status":"ok","customers":50,"active_outages":4}
+open http://localhost:3000    # sign in with DASHBOARD_USER / DASHBOARD_PASSWORD
 ```
 
-The database is created and seeded on first start. To reset it: `docker compose down -v`. To run the API outside Docker instead (database still in Docker):
+The database is created and seeded on first start. To reset it: `docker compose down -v`.
+
+To run the API and dashboard on your machine instead, with only the database in Docker:
 
 ```bash
 docker compose up -d db
 cd api && ../.venv/bin/uvicorn app.main:app --port 8000 --env-file ../.env
+cd web && npm install && npm run dev
 ```
 
-**3. Talk to the agent.**
+**4. Talk to the agent.**
 
 ```bash
 curl -s localhost:8000/chat -H 'content-type: application/json' \
@@ -106,20 +119,13 @@ Pass the returned `conversation_id` to continue the same conversation. Interacti
 
 ### Dashboard
 
-With the API running:
-
-```bash
-cd web
-cp .env.example .env.local    # DASHBOARD_API_TOKEN (same as in ../.env), DASHBOARD_PASSWORD, SESSION_SECRET
-npm install
-npm run dev                   # http://localhost:3000, sign in with DASHBOARD_USER / DASHBOARD_PASSWORD
-```
+At `http://localhost:3000`, with either way of running it above.
 
 - **Conversations:** every conversation, newest activity first. Open one to read the transcript with each tool call and its result inline, plus the customer and any tickets. Type in the box to talk to the agent as a customer.
 - **Ticket queue:** open tickets, high priority first. Change a ticket's status from the table.
 - **SMS outbox:** every text the agent sent, including simulated ones.
 
-The browser calls `/api/*` on the dashboard, and Next.js forwards those requests to the API (`API_URL`, default `http://localhost:8000`), so the API needs no CORS setup. Pages refresh every few seconds. Every page needs a staff sign-in; see [Staff login](#staff-login).
+The browser calls `/api/*` on the dashboard, and Next.js forwards those requests to the API (`API_URL`: `http://localhost:8000` by default, `http://api:8000` in Docker), so the API needs no CORS setup. Pages refresh every few seconds. Every page needs a staff sign-in; see [Staff login](#staff-login).
 
 ### Configuration
 
@@ -138,11 +144,11 @@ The API reads `.env` (template: [`.env.example`](.env.example)):
 | `ENABLE_API_DOCS` | No | `true` serves `/docs` and `/openapi.json`. Off by default. |
 | `CHAT_RATE_PER_MINUTE`, `CHAT_RATE_PER_DAY`, `CHAT_GLOBAL_PER_DAY` | No | `/chat` rate limits (defaults 10, 100, 2000) |
 
-The dashboard reads `web/.env.local` (template: [`web/.env.example`](web/.env.example)):
+The dashboard reads `web/.env.local` (template: [`web/.env.example`](web/.env.example)), both in Docker and with `npm run dev`:
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `API_URL` | No | Where the dashboard forwards `/api/*` requests. Defaults to `http://localhost:8000`. Read at build time, so rebuild after changing it. |
+| `API_URL` | No | Where the dashboard forwards `/api/*` requests. Defaults to `http://localhost:8000`. Read at build time, so rebuild after changing it. Docker Compose sets it to `http://api:8000` as a build argument. |
 | `DASHBOARD_API_TOKEN` | Yes | Same value as in the API's `.env` |
 | `DASHBOARD_USER`, `DASHBOARD_PASSWORD` | Yes | The staff sign-in |
 | `SESSION_SECRET` | Yes | Signs session cookies; at least 32 characters. Changing it signs everyone out. |
@@ -158,7 +164,7 @@ Both env files are gitignored. Never commit them.
 | Agent guardrails | The agent can only act on the customer it identified, and stops after escalating | [`tools.py`](api/app/agent/tools.py) |
 | Staff login | Dashboard pages and data need a signed-in session | [`middleware.ts`](web/src/middleware.ts), [`staffAuth.ts`](web/src/lib/staffAuth.ts) |
 | Rate limits | Caps on customer chat, staff chat and failed sign-ins | [`ratelimit.py`](api/app/helpers/ratelimit.py), [`rateLimit.ts`](web/src/lib/rateLimit.ts) |
-| Infrastructure | No default credentials, localhost-only ports, docs off, locked-down container, security headers | [`docker-compose.yml`](docker-compose.yml), [`Dockerfile`](api/Dockerfile), [`next.config.ts`](web/next.config.ts) |
+| Infrastructure | No default credentials, localhost-only ports, docs off, locked-down containers, security headers | [`docker-compose.yml`](docker-compose.yml), [`api/Dockerfile`](api/Dockerfile), [`web/Dockerfile`](web/Dockerfile), [`next.config.ts`](web/next.config.ts) |
 
 Input validation (Pydantic types and lengths) and parameterized SQL were there from the start.
 
@@ -203,9 +209,9 @@ Going over a limit returns `429` with a `Retry-After` header. Every limit can be
 ### Infrastructure
 
 - **No default credentials.** The database password and connection string come from `.env`. Compose refuses to start without `POSTGRES_PASSWORD`, and the API refuses to connect without `DATABASE_URL`.
-- **Localhost-only ports.** Compose publishes Postgres (5432) and the API (8000) on `127.0.0.1`, so other machines on the network can't reach them.
+- **Localhost-only ports.** Compose publishes Postgres (5432), the API (8000) and the dashboard (3000) on `127.0.0.1`, so other machines on the network can't reach them.
 - **API docs off.** `/docs` and `/openapi.json` return `404` unless `ENABLE_API_DOCS=true`.
-- **Locked-down API container.** The container runs as an unprivileged user (uid 10001), with a read-only filesystem, all Linux capabilities dropped and `no-new-privileges`.
+- **Locked-down containers.** The API and dashboard containers run as unprivileged users, with read-only filesystems, all Linux capabilities dropped and `no-new-privileges`. The dashboard image never contains `.env.local`; its secrets are passed in at runtime ([`web/.dockerignore`](web/.dockerignore)).
 - **Dashboard response headers.** Every response sends `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` (no embedding in other sites), `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and a `Permissions-Policy` that blocks camera, microphone and location. The `X-Powered-By` header is off.
 
 CI uses throwaway `outage`/`outage` credentials for its own temporary database. They never reach a real deployment.
@@ -261,9 +267,13 @@ pip install -r api/requirements.txt
 docker compose up -d db       # tests use the seeded database
 set -a; source .env; set +a   # tests read DATABASE_URL from .env
 cd api && pytest -q
+
+cd web && npm test            # dashboard tests: no API or database needed
 ```
 
-The tests cover every endpoint, the agent loop and its guardrails, the caller tokens, the rate limits and the docs being off. Agent tests use a scripted stand-in for the model, so they need no API key and run in CI on every push. Tests clean up any rows they write.
+The API tests cover every endpoint, the agent loop and its guardrails, the caller tokens, the rate limits and the docs being off. Agent tests use a scripted stand-in for the model, so they need no API key and run in CI on every push. Tests clean up any rows they write.
+
+The dashboard tests ([`web/tests/`](web/tests/), Vitest) cover the session cookie (signing, tampering, expiry), sign-in (cookie flags, wrong credentials, missing config), the failed sign-in limits (per IP, global, window), the middleware (redirects, `401`, the token added and the cookie dropped on forwarded requests) and the staff chat limit.
 
 ## Seed data
 
@@ -293,9 +303,10 @@ web/              Next.js dashboard
   src/middleware.ts   staff session check; adds the API token to forwarded requests
   src/app/login/      sign-in page (src/app/auth/ has the login and logout routes)
   src/lib/            API client, session cookies, staff auth, rate limits
+  tests/              Vitest tests for login, sessions, middleware and rate limits
 db/               schema and seed SQL, loaded by Postgres on first start
 scripts/          seed generator
-.github/          CI: runs the API tests against a seeded DB, and lints and builds the dashboard
+.github/          CI: runs the API tests against a seeded DB, and lints, tests and builds the dashboard
 ```
 
 ## Roadmap
